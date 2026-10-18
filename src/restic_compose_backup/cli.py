@@ -158,11 +158,13 @@ def backup(config, containers: RunningContainers):
         raise RuntimeError("Backup process already running")
 
     # Map all volumes from the backup container into the backup process container
-    volumes = containers.this_container.volumes
+    own_volumes = containers.this_container.volumes.copy()
+    volumes = own_volumes.copy()
 
     # Map volumes from other containers we are backing up
     mounts = containers.generate_backup_mounts("/volumes")
     volumes.update(mounts)
+    volumes.update(own_volumes)
 
     logger.debug(
         "Starting backup container with image %s", containers.this_container.image
