@@ -271,12 +271,18 @@ class Container:
         return filtered
 
     def volumes_for_backup(self, source_prefix="/volumes", mode="ro"):
-        """Get volumes configured for backup"""
+        """Get volumes configured for backup."""
         mounts = self.filter_mounts()
         volumes = {}
+
         for mount in mounts:
-            volumes[mount.source] = {
-                "bind": self.get_volume_backup_destination(mount, source_prefix),
+            source = mount.source
+            destination = self.get_volume_backup_destination(
+                mount, source_prefix
+            )
+
+            volumes[source] = {
+                "bind": destination,
                 "mode": mode,
             }
 
@@ -353,6 +359,42 @@ class Mount:
     def __init__(self, data, container=None):
         self._data = data
         self._container = container
+        self._subpath = self._find_subpath()
+
+    def _find_subpath(self):
+        """Find the requested subpath in the original Docker mount config."""
+        if self._data.get("Type") != VOLUME_TYPE_VOLUME or not self._container:
+            return None
+
+        host_config = self._container._data.get("HostConfig") or {}
+        configured_mounts = host_config.get("Mounts") or []
+
+        destination = self._data.get("Destination")
+
+        matches = [
+            mount
+            for mount in configured_mounts
+            if mount.get("Target", mount.get("Destination")) == destination
+        ]
+
+        if len(matches) > 1:
+            raise ValueError(f"Ambiguous mount configuration for {destination}")
+
+        if not matches:
+            return None
+
+        volume_options = matches[0].get("VolumeOptions") or {}
+        subpath = volume_options.get("Subpath") or matches[0].get("Subpath")
+
+        if not subpath:
+            return None
+
+        subpath = Path(subpath)
+
+        if subpath.is_absolute() or ".." in subpath.parts:
+            raise ValueError(f"Unsafe Docker volume subpath: {subpath}")
+
+        return subpath
 
     @property
     def container(self) -> Container:
@@ -371,8 +413,13 @@ class Mount:
 
     @property
     def source(self) -> str:
-        """Source of the mount. Volume name or path"""
-        return self._data.get("Source")
+        """Source of the mount. Volume name or path."""
+        source = self._data.get("Source")
+
+        if self._subpath:
+            return str(Path(source) / self._subpath)
+
+        return source
 
     @property
     def destination(self) -> str:
